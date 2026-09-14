@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full bg-slate-900 text-slate-100 select-none">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>EasyShare Paint - リアルタイム協調ペイントツール</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PeerJS WebRTC Library -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* Canvas specific styling and touch prevention */
+    canvas {
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 3px;
+    }
+
+    /* Peer Cursor Styling */
+    .peer-cursor {
+      position: absolute;
+      pointer-events: none;
+      z-index: 30;
+      transition: transform 0.05s linear;
+    }
+
+    .glass-panel {
+      background: rgba(30, 41, 59, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden font-sans antialiased">
+
+  <!-- Header Bar -->
+  <header class="h-14 glass-panel border-b border-slate-800 flex items-center justify-between px-4 z-20 shrink-0">
+    <!-- Brand / Title -->
+    <div class="flex items-center space-x-3">
+      <div class="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-500/30">
+        <i data-lucide="palette" class="w-5 h-5"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-sm md:text-base leading-tight tracking-wide flex items-center gap-2">
+          EasyShare Paint
+          <span class="text-xs font-normal px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">P2P PeerJS</span>
+        </h1>
+        <p class="text-[10px] text-slate-400 hidden sm:block">インストール不要・GitHub Pagesで無料公開可能</p>
+      </div>
+    </div>
+
+    <!-- Room / Connection Controls -->
+    <div class="flex items-center space-x-2 md:space-x-3">
+      <!-- Status Badge -->
+      <div id="connectionStatus" class="hidden sm:flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-800 border border-slate-700 text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="statusDot"></span>
+        <span id="statusText">オフライン</span>
+      </div>
+
+      <!-- Users List Dropdown -->
+      <div class="relative group">
+        <button id="usersBtn" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium border border-slate-700 transition">
+          <i data-lucide="users" class="w-4 h-4 text-indigo-400"></i>
+          <span id="userCount">1人</span>
+        </button>
+        <!-- Peer List Tooltip -->
+        <div id="usersList" class="absolute right-0 top-full mt-2 w-48 glass-panel rounded-xl p-2 hidden group-hover:block shadow-2xl z-50 text-xs border border-slate-700">
+          <div class="font-semibold px-2 py-1 border-b border-slate-700/50 text-slate-400 mb-1">参加中のユーザー</div>
+          <div id="peerListContainer" class="space-y-1 max-h-40 overflow-y-auto">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Share Room Link Button -->
+      <button id="shareRoomBtn" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-lg shadow-indigo-600/20 transition">
+        <i data-lucide="share-2" class="w-4 h-4"></i>
+        <span class="hidden md:inline">部屋リンクをコピー</span>
+      </button>
+
+      <!-- GitHub Pages Help Modal Button -->
+      <button id="ghPagesHelpBtn" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition border border-slate-700" title="GitHub Pagesで公開する方法">
+        <i data-lucide="github" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Application Body -->
+  <div class="flex-1 flex relative overflow-hidden">
+
+    <!-- Floating Canvas Toolbar (Left Side / Bottom on Mobile) -->
+    <aside class="absolute left-3 top-3 bottom-3 z-10 w-16 glass-panel rounded-2xl flex flex-col items-center justify-between py-3 shadow-xl border border-slate-700/60 transition-all">
+      <!-- Tool Selectors -->
+      <div class="flex flex-col items-center space-y-2 w-full px-2">
+        <!-- Pen Tool -->
+        <button data-tool="pen" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center active text-indigo-400 bg-indigo-500/10 border border-indigo-500/30" title="ペン">
+          <i data-lucide="pencil" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Smooth Brush -->
+        <button data-tool="brush" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="ブラシ">
+          <i data-lucide="brush" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Highlighter / Marker -->
+        <button data-tool="highlighter" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="蛍光ペン">
+          <i data-lucide="highlighter" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Eraser -->
+        <button data-tool="eraser" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="消しゴム">
+          <i data-lucide="eraser" class="w-5 h-5"></i>
+        </button>
+
+        <div class="w-8 h-px bg-slate-700 my-1"></div>
+
+        <!-- Line Tool -->
+        <button data-tool="line" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="直線">
+          <i data-lucide="minus" class="w-5 h-5 rotate-45"></i>
+        </button>
+
+        <!-- Rectangle Tool -->
+        <button data-tool="rect" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="四角形">
+          <i data-lucide="square" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Circle Tool -->
+        <button data-tool="circle" class="tool-btn p-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition w-full flex justify-center" title="円">
+          <i data-lucide="circle" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Color Preview / Picker Quick Button -->
+      <div class="flex flex-col items-center space-y-3 w-full px-2">
+        <div class="relative group">
+          <input type="color" id="colorPicker" value="#3b82f6" class="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10">
+          <div id="colorDisplay" class="w-8 h-8 rounded-full border-2 border-white/80 shadow-md transition-transform group-hover:scale-110" style="background-color: #3b82f6;"></div>
+        </div>
+
+        <!-- Clear & Undo Options -->
+        <button id="undoBtn" class="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition" title="元に戻す (Ctrl+Z)">
+          <i data-lucide="undo-2" class="w-5 h-5"></i>
+        </button>
+
+        <button id="clearBtn" class="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition" title="キャンバスを全消去">
+          <i data-lucide="trash-2" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Top Horizontal Control Panel for Fine Brush Settings -->
+    <div class="absolute left-22 top-3 z-10 glass-panel rounded-2xl px-4 py-2 flex items-center space-x-4 shadow-xl border border-slate-700/60 max-w-[calc(100vw-7rem)] overflow-x-auto">
+      
+      <!-- Quick Palette -->
+      <div class="flex items-center space-x-1.5 shrink-0">
+        <button class="palette-btn w-6 h-6 rounded-full bg-slate-900 border border-slate-600 focus:scale-110" data-color="#0f172a"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-white border border-slate-300 focus:scale-110" data-color="#ffffff"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-rose-500 focus:scale-110" data-color="#f43f5e"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-amber-500 focus:scale-110" data-color="#f59e0b"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-emerald-500 focus:scale-110" data-color="#10b981"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-sky-500 focus:scale-110" data-color="#0ea5e9"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-indigo-500 focus:scale-110" data-color="#6366f1"></button>
+        <button class="palette-btn w-6 h-6 rounded-full bg-purple-500 focus:scale-110" data-color="#a855f7"></button>
+      </div>
+
+      <div class="w-px h-6 bg-slate-700 shrink-0"></div>
+
+      <!-- Size Slider -->
+      <div class="flex items-center space-x-2 shrink-0">
+        <i data-lucide="circle-dot" class="w-4 h-4 text-slate-400"></i>
+        <input type="range" id="sizeSlider" min="1" max="60" value="6" class="w-20 md:w-28 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+        <span id="sizeValue" class="text-xs font-mono text-slate-400 w-6 text-right">6px</span>
+      </div>
+
+      <div class="w-px h-6 bg-slate-700 shrink-0"></div>
+
+      <!-- Opacity Slider -->
+      <div class="flex items-center space-x-2 shrink-0">
+        <i data-lucide="droplet" class="w-4 h-4 text-slate-400"></i>
+        <input type="range" id="opacitySlider" min="0.1" max="1" step="0.05" value="1" class="w-20 md:w-24 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+        <span id="opacityValue" class="text-xs font-mono text-slate-400 w-8 text-right">100%</span>
+      </div>
+
+      <div class="w-px h-6 bg-slate-700 shrink-0"></div>
+
+      <!-- Save Button -->
+      <button id="saveBtn" class="flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 text-xs font-medium transition shrink-0">
+        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+        <span>保存</span>
+      </button>
+    </div>
+
+    <!-- Drawing Workspace Area -->
+    <div id="canvasContainer" class="w-full h-full relative cursor-crosshair bg-slate-950 overflow-hidden flex items-center justify-center">
+      <!-- Main Canvas Layer -->
+      <canvas id="paintCanvas" class="bg-white shadow-2xl rounded-sm"></canvas>
+      <!-- Peer Cursor Overlay Layer -->
+      <div id="cursorOverlay" class="absolute inset-0 pointer-events-none overflow-hidden"></div>
+    </div>
+  </div>
+
+  <!-- GitHub Pages Modal -->
+  <div id="ghModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="glass-panel max-w-xl w-full rounded-2xl p-6 border border-slate-700 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+      <button id="closeGhModalBtn" class="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="p-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white">
+          <i data-lucide="github" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h2 class="text-lg font-bold text-white">GitHub Pages で無料公開する方法</h2>
+          <p class="text-xs text-slate-400">サーバー不要で誰でもアクセスできるURLを作ろう！</p>
+        </div>
+      </div>
+
+      <div class="space-y-4 text-xs md:text-sm text-slate-300">
+        <div class="p-3 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span class="font-bold text-indigo-400 block mb-1">ステップ 1: GitHubでリポジトリを作成</span>
+          GitHubにログインし、「New repository」から新しいリポジトリ（例: <code class="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">my-paint-app</code>）を作成します。
+        </div>
+
+        <div class="p-3 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span class="font-bold text-indigo-400 block mb-1">ステップ 2: ファイルを保存してアップロード</span>
+          このファイルを <code class="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">index.html</code> という名前で保存し、作成したリポジトリにアップロード（またはコミット）します。
+        </div>
+
+        <div class="p-3 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span class="font-bold text-indigo-400 block mb-1">ステップ 3: GitHub Pagesの有効化</span>
+          リポジトリの <b>Settings</b> &gt; <b>Pages</b> を開き、<b>Build and deployment</b> の Source を 「Deploy from a branch」にし、Branch を <code class="bg-slate-800 px-1 py-0.5 rounded text-indigo-300">main</code> (/root) に設定して Save します。
+        </div>
+
+        <div class="p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-xl text-indigo-200">
+          <div class="flex items-center space-x-2 mb-1">
+            <i data-lucide="sparkles" class="w-4 h-4 text-indigo-400"></i>
+            <span class="font-bold">完了！</span>
+          </div>
+          数分で <code class="text-xs font-mono bg-indigo-900/60 px-1.5 py-0.5 rounded">https://ユーザー名.github.io/リポジトリ名/</code> で全世界に公開され、友達を招待してペイントできます！
+        </div>
+      </div>
+
+      <div class="mt-6 flex justify-end">
+        <button id="confirmGhModalBtn" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition">
+          閉じる
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // App State Configuration
+    const state = {
+      tool: 'pen', // pen, brush, highlighter, eraser, line, rect, circle
+      color: '#3b82f6',
+      size: 6,
+      opacity: 1,
+      isDrawing: false,
+      startX: 0,
+      startY: 0,
+      snapshot: null, // For shape previewing
+      history: [],
+      maxHistory: 20,
+      myPeerId: null,
+      userName: 'User-' + Math.floor(1000 + Math.random() * 9000),
+      userColor: '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0'),
+      peers: {}, // Active PeerJS connections
+      peerCursors: {} // Remote user cursors
+    };
+
+    // DOM Elements
+    const canvas = document.getElementById('paintCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const canvasContainer = document.getElementById('canvasContainer');
+    const cursorOverlay = document.getElementById('cursorOverlay');
+
+    const colorPicker = document.getElementById('colorPicker');
+    const colorDisplay = document.getElementById('colorDisplay');
+    const sizeSlider = document.getElementById('sizeSlider');
+    const sizeValue = document.getElementById('sizeValue');
+    const opacitySlider = document.getElementById('opacitySlider');
+    const opacityValue = document.getElementById('opacityValue');
+
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const userCount = document.getElementById('userCount');
+    const peerListContainer = document.getElementById('peerListContainer');
+
+    // Initialize Canvas Dimensions
+    function initCanvasSize() {
+      const rect = canvasContainer.getBoundingClientRect();
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      if (canvas.width > 0) tempCtx.drawImage(canvas, 0, 0);
+
+      // Set explicit resolution matching screen
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+
+      // Fill with white background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Restore drawn artwork if resized
+      if (tempCanvas.width > 0) {
+        ctx.drawImage(tempCanvas, 0, 0);
+      }
+      saveHistoryState();
+    }
+
+    // Save state for local Undo
+    function saveHistoryState() {
+      if (state.history.length >= state.maxHistory) {
+        state.history.shift();
+      }
+      state.history.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    }
+
+    // Helper to get relative canvas coordinates
+    function getCoords(e) {
+      const rect = canvas.getBoundingClientRect();
+      let clientX = e.clientX;
+      let clientY = e.clientY;
+
+      if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      }
+
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top,
+        pressure: e.pressure && e.pressure !== 0 ? e.pressure : 0.5
+      };
+    }
+
+    // Canvas Drawing Handlers
+    function startDrawing(e) {
+      e.preventDefault();
+      state.isDrawing = true;
+      const coords = getCoords(e);
+      state.startX = coords.x;
+      state.startY = coords.y;
+
+      ctx.beginPath();
+      ctx.moveTo(coords.x, coords.y);
+
+      // Store canvas snapshot for non-permanent shape previewing
+      if (['line', 'rect', 'circle'].includes(state.tool)) {
+        state.snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      }
+
+      // Send local stroke start to peers
+      broadcastData({
+        type: 'draw-start',
+        x: coords.x,
+        y: coords.y,
+        tool: state.tool,
+        color: state.color,
+        size: state.size,
+        opacity: state.opacity
+      });
+    }
+
+    function draw(e) {
+      if (!state.isDrawing) {
+        // Send cursor position even when not drawing
+        const coords = getCoords(e);
+        broadcastCursorPos(coords.x, coords.y);
+        return;
+      }
+      e.preventDefault();
+
+      const coords = getCoords(e);
+      broadcastCursorPos(coords.x, coords.y);
+
+      if (['pen', 'brush', 'highlighter', 'eraser'].includes(state.tool)) {
+        executeStroke({
+          x: coords.x,
+          y: coords.y,
+          tool: state.tool,
+          color: state.color,
+          size: state.size,
+          opacity: state.opacity,
+          pressure: coords.pressure
+        });
+
+        // Broadcast current point to peers
+        broadcastData({
+          type: 'draw-step',
+          x: coords.x,
+          y: coords.y,
+          pressure: coords.pressure
+        });
+      } else {
+        // Render shape preview locally
+        if (state.snapshot) {
+          ctx.putImageData(state.snapshot, 0, 0);
+        }
+        drawShape(state.tool, state.startX, state.startY, coords.x, coords.y, state.color, state.size, state.opacity);
+      }
+    }
+
+    function stopDrawing(e) {
+      if (!state.isDrawing) return;
+      state.isDrawing = false;
+
+      if (['line', 'rect', 'circle'].includes(state.tool)) {
+        const coords = getCoords(e || { clientX: state.startX, clientY: state.startY });
+        drawShape(state.tool, state.startX, state.startY, coords.x, coords.y, state.color, state.size, state.opacity);
+        
+        // Broadcast final shape parameters
+        broadcastData({
+          type: 'draw-shape',
+          tool: state.tool,
+          startX: state.startX,
+          startY: state.startY,
+          endX: coords.x,
+          endY: coords.y,
+          color: state.color,
+          size: state.size,
+          opacity: state.opacity
+        });
+      } else {
+        broadcastData({ type: 'draw-end' });
+      }
+
+      saveHistoryState();
+    }
+
+    // Low-level Stroke Drawing
+    function executeStroke(data) {
+      ctx.globalAlpha = data.opacity;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if (data.tool === 'eraser') {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = data.size * 2;
+      } else if (data.tool === 'highlighter') {
+        ctx.strokeStyle = data.color;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = data.size * 2.5;
+        ctx.lineCap = 'square';
+      } else if (data.tool === 'brush') {
+        ctx.strokeStyle = data.color;
+        // Dynamic size scaling with pressure if available
+        ctx.lineWidth = data.size * (data.pressure ? data.pressure * 1.5 : 1);
+      } else {
+        // Standard Pen
+        ctx.strokeStyle = data.color;
+        ctx.lineWidth = data.size;
+      }
+
+      ctx.lineTo(data.x, data.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(data.x, data.y);
+
+      // Reset Alpha
+      ctx.globalAlpha = 1.0;
+    }
+
+    // Geometry Shape Drawing
+    function drawShape(tool, startX, startY, endX, endY, color, size, opacity) {
+      ctx.save();
+      ctx.globalAlpha = opacity;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      ctx.beginPath();
+      if (tool === 'line') {
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+      } else if (tool === 'rect') {
+        const width = endX - startX;
+        const height = endY - startY;
+        ctx.rect(startX, startY, width, height);
+      } else if (tool === 'circle') {
+        const radius = Math.hypot(endX - startX, endY - startY);
+        ctx.arc(startX, startY, radius, 0, Math.PI * 2);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    let peer = null;
+
+    function initPeerJS() {
+      // Create PeerJS client with auto-generated ID
+      peer = new Peer();
+
+      peer.on('open', (id) => {
+        state.myPeerId = id;
+        updateConnectionStatus(true, '待機中 (ホスト)');
+
+        // Check if joining existing room via URL hash (#room=PEER_ID)
+        const hash = window.location.hash;
+        if (hash.includes('#room=')) {
+          const hostId = hash.replace('#room=', '');
+          connectToPeer(hostId);
+        }
+        updatePeerListUI();
+      });
+
+      // Handle incoming connection requests
+      peer.on('connection', (conn) => {
+        setupConnection(conn);
+        showToast('友達が接続しました！', 'success');
+      });
+
+      peer.on('error', (err) => {
+        console.error('PeerJS error:', err);
+        showToast('接続エラーが発生しました: ' + err.type, 'error');
+      });
+    }
+
+    function connectToPeer(hostId) {
+      if (!peer || hostId === state.myPeerId) return;
+      updateConnectionStatus(false, '接続中...');
+      const conn = peer.connect(hostId);
+      setupConnection(conn);
+    }
+
+    function setupConnection(conn) {
+      state.peers[conn.peer] = conn;
+
+      conn.on('open', () => {
+        updateConnectionStatus(true, 'オンライン (' + Object.keys(state.peers).length + '人と接続中)');
+        updatePeerListUI();
+
+        // Send current local user info
+        conn.send({
+          type: 'user-info',
+          name: state.userName,
+          color: state.userColor
+        });
+
+        // Sync full canvas to newly joined peer
+        conn.send({
+          type: 'canvas-sync',
+          dataUrl: canvas.toDataURL()
+        });
+      });
+
+      // Receive Realtime Stroke/Canvas Data
+      conn.on('data', (data) => {
+        handleRemoteData(conn.peer, data);
+      });
+
+      conn.on('close', () => {
+        removePeerCursor(conn.peer);
+        delete state.peers[conn.peer];
+        const peerCount = Object.keys(state.peers).length;
+        updateConnectionStatus(peerCount > 0, peerCount > 0 ? `オンライン (${peerCount}人と接続)` : '待機中');
+        updatePeerListUI();
+        showToast('友達が切断しました', 'info');
+      });
+    }
+
+    // Broadcast message to all active peer connections
+    function broadcastData(data) {
+      Object.values(state.peers).forEach(conn => {
+        if (conn.open) {
+          conn.send(data);
+        }
+      });
+    }
+
+    // Broadcast cursor tracking
+    function broadcastCursorPos(x, y) {
+      broadcastData({
+        type: 'cursor-move',
+        x: x,
+        y: y,
+        name: state.userName,
+        color: state.userColor
+      });
+    }
+
+    // Process incoming network drawing actions
+    const remoteStrokeStates = {};
+
+    function handleRemoteData(peerId, data) {
+      switch (data.type) {
+        case 'user-info':
+          if (!state.peerCursors[peerId]) {
+            state.peerCursors[peerId] = { name: data.name, color: data.color, x: 0, y: 0 };
+          } else {
+            state.peerCursors[peerId].name = data.name;
+            state.peerCursors[peerId].color = data.color;
+          }
+          updatePeerListUI();
+          break;
+
+        case 'cursor-move':
+          updateRemoteCursor(peerId, data.x, data.y, data.name, data.color);
+          break;
+
+        case 'draw-start':
+          remoteStrokeStates[peerId] = {
+            tool: data.tool,
+            color: data.color,
+            size: data.size,
+            opacity: data.opacity
+          };
+          ctx.beginPath();
+          ctx.moveTo(data.x, data.y);
+          break;
+
+        case 'draw-step':
+          const strokeState = remoteStrokeStates[peerId];
+          if (strokeState) {
+            executeStroke({
+              x: data.x,
+              y: data.y,
+              tool: strokeState.tool,
+              color: strokeState.color,
+              size: strokeState.size,
+              opacity: strokeState.opacity,
+              pressure: data.pressure
+            });
+          }
+          break;
+
+        case 'draw-end':
+          delete remoteStrokeStates[peerId];
+          saveHistoryState();
+          break;
+
+        case 'draw-shape':
+          drawShape(data.tool, data.startX, data.startY, data.endX, data.endY, data.color, data.size, data.opacity);
+          saveHistoryState();
+          break;
+
+        case 'clear':
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          saveHistoryState();
+          showToast('キャンバスが全消去されました', 'info');
+          break;
+
+        case 'canvas-sync':
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0);
+            saveHistoryState();
+          };
+          img.src = data.dataUrl;
+          break;
+      }
+    }
+
+    // Render and animate remote cursors on canvas
+    function updateRemoteCursor(peerId, x, y, name, color) {
+      let cursorEl = document.getElementById(`cursor-${peerId}`);
+      if (!cursorEl) {
+        cursorEl = document.createElement('div');
+        cursorEl.id = `cursor-${peerId}`;
+        cursorEl.className = 'peer-cursor flex items-center space-x-1';
+        cursorEl.innerHTML = `
+          <svg class="w-4 h-4 text-shadow" style="color: ${color};" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M3 3l7 18 3-7 7-3L3 3z"/>
+          </svg>
+          <span class="text-[10px] px-1.5 py-0.5 rounded text-white font-medium shadow-md whitespace-nowrap" style="background-color: ${color};">${name}</span>
+        `;
+        cursorOverlay.appendChild(cursorEl);
+      }
+      cursorEl.style.transform = `translate(${x}px, ${y}px)`;
+    }
+
+    function removePeerCursor(peerId) {
+      const cursorEl = document.getElementById(`cursor-${peerId}`);
+      if (cursorEl) cursorEl.remove();
+      delete state.peerCursors[peerId];
+    }
+
+    // Tool buttons toggle
+    document.querySelectorAll('.tool-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tool-btn').forEach(b => {
+          b.classList.remove('active', 'text-indigo-400', 'bg-indigo-500/10', 'border', 'border-indigo-500/30');
+          b.classList.add('text-slate-400');
+        });
+        btn.classList.add('active', 'text-indigo-400', 'bg-indigo-500/10', 'border', 'border-indigo-500/30');
+        btn.classList.remove('text-slate-400');
+        state.tool = btn.dataset.tool;
+      });
+    });
+
+    // Color picker logic
+    colorPicker.addEventListener('input', (e) => {
+      state.color = e.target.value;
+      colorDisplay.style.backgroundColor = state.color;
+    });
+
+    // Quick palette items
+    document.querySelectorAll('.palette-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.color = btn.dataset.color;
+        colorPicker.value = state.color;
+        colorDisplay.style.backgroundColor = state.color;
+      });
+    });
+
+    // Brush Size and Opacity inputs
+    sizeSlider.addEventListener('input', (e) => {
+      state.size = parseInt(e.target.value);
+      sizeValue.textContent = `${state.size}px`;
+    });
+
+    opacitySlider.addEventListener('input', (e) => {
+      state.opacity = parseFloat(e.target.value);
+      opacityValue.textContent = `${Math.round(state.opacity * 100)}%`;
+    });
+
+    // Clear Canvas
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      saveHistoryState();
+      broadcastData({ type: 'clear' });
+      showToast('キャンバスを全消去しました', 'info');
+    });
+
+    // Undo action
+    document.getElementById('undoBtn').addEventListener('click', () => {
+      if (state.history.length > 1) {
+        state.history.pop(); // Remove current state
+        const prevState = state.history[state.history.length - 1];
+        ctx.putImageData(prevState, 0, 0);
+        // Sync full updated canvas image to peers after undo
+        broadcastData({
+          type: 'canvas-sync',
+          dataUrl: canvas.toDataURL()
+        });
+      }
+    });
+
+    // Save image locally
+    document.getElementById('saveBtn').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = `easyshare-paint-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      showToast('画像を保存しました！', 'success');
+    });
+
+    // Share Room URL Generator
+    document.getElementById('shareRoomBtn').addEventListener('click', () => {
+      if (!state.myPeerId) {
+        showToast('接続準備中です。少々お待ちください', 'info');
+        return;
+      }
+      const shareUrl = `${window.location.origin}${window.location.pathname}#room=${state.myPeerId}`;
+      
+      // Fallback copy execCommand for iframe security
+      const tempInput = document.createElement('input');
+      document.body.appendChild(tempInput);
+      tempInput.value = shareUrl;
+      tempInput.select();
+      document.execCommand('copy');
+      document.body.removeChild(tempInput);
+
+      showToast('部屋の共有リンクをコピーしました！友達に送ろう', 'success');
+    });
+
+    // GitHub Pages Help Modal Events
+    const ghModal = document.getElementById('ghModal');
+    document.getElementById('ghPagesHelpBtn').addEventListener('click', () => ghModal.classList.remove('hidden'));
+    document.getElementById('closeGhModalBtn').addEventListener('click', () => ghModal.classList.add('hidden'));
+    document.getElementById('confirmGhModalBtn').addEventListener('click', () => ghModal.classList.add('hidden'));
+
+    // UI Status Helpers
+    function updateConnectionStatus(isOnline, text) {
+      statusText.textContent = text;
+      if (isOnline) {
+        statusDot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+        document.getElementById('connectionStatus').classList.remove('text-slate-400');
+        document.getElementById('connectionStatus').classList.add('text-emerald-400');
+      } else {
+        statusDot.className = 'w-2 h-2 rounded-full bg-amber-500';
+        document.getElementById('connectionStatus').classList.add('text-slate-400');
+      }
+    }
+
+    function updatePeerListUI() {
+      const count = Object.keys(state.peers).length + 1;
+      userCount.textContent = `${count}人`;
+
+      peerListContainer.innerHTML = '';
+      
+      // Add Myself
+      const myItem = document.createElement('div');
+      myItem.className = 'flex items-center justify-between p-1.5 rounded bg-slate-800/60';
+      myItem.innerHTML = `
+        <div class="flex items-center space-x-2">
+          <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${state.userColor};"></span>
+          <span class="font-medium text-white">${state.userName} (あなた)</span>
+        </div>
+      `;
+      peerListContainer.appendChild(myItem);
+
+      // Add Connected Peers
+      Object.entries(state.peerCursors).forEach(([id, peerInfo]) => {
+        const peerItem = document.createElement('div');
+        peerItem.className = 'flex items-center justify-between p-1.5 rounded hover:bg-slate-800/40';
+        peerItem.innerHTML = `
+          <div class="flex items-center space-x-2">
+            <span class="w-2.5 h-2.5 rounded-full" style="background-color: ${peerInfo.color};"></span>
+            <span class="text-slate-300">${peerInfo.name}</span>
+          </div>
+        `;
+        peerListContainer.appendChild(peerItem);
+      });
+    }
+
+    // Toast notification utility
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      
+      let bg = 'bg-slate-800 border-slate-700 text-white';
+      if (type === 'success') bg = 'bg-emerald-900/90 border-emerald-500/50 text-emerald-100';
+      if (type === 'error') bg = 'bg-rose-900/90 border-rose-500/50 text-rose-100';
+
+      toast.className = `px-4 py-2.5 rounded-xl border glass-panel shadow-2xl text-xs flex items-center space-x-2 transition-all transform translate-y-2 opacity-0 pointer-events-auto ${bg}`;
+      toast.innerHTML = `
+        <i data-lucide="${type === 'success' ? 'check-circle' : type === 'error' ? 'alert-circle' : 'info'}" class="w-4 h-4 shrink-0"></i>
+        <span>${message}</span>
+      `;
+
+      container.appendChild(toast);
+      lucide.createIcons();
+
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    // Canvas Listener Bindings for Mouse & Touch / Pointer
+    canvas.addEventListener('pointerdown', startDrawing);
+    canvas.addEventListener('pointermove', draw);
+    canvas.addEventListener('pointerup', stopDrawing);
+    canvas.addEventListener('pointerleave', stopDrawing);
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        document.getElementById('undoBtn').click();
+      }
+    });
+
+    // Initialize Canvas Size & PeerJS on window load
+    window.addEventListener('load', () => {
+      initCanvasSize();
+      initPeerJS();
+    });
+
+    // Handle Window Resize
+    window.addEventListener('resize', () => {
+      initCanvasSize();
+    });
+  </script>
+</body>
+</html>
